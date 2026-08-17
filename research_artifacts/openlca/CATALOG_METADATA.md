@@ -5,7 +5,7 @@
 - **Export mechanism:** openLCA IPC server + `olca-ipc` / `olca-schema`
 - **IPC port used during the revision workflow:** 8080
 - **Export period:** August 2026
-- **Exact database release/version:** ELCD 3.2**
+- **Exact database release/version:** ELCD 3.2
 - **Included fields:** process UUID, process name, category, location, library,
   process type
 - **Not included:** complete LCI exchanges, product systems, LCIA results, or the
