@@ -10,7 +10,7 @@ be inspected without changing the runtime implementation.
 ### `openlca/ELCD_Process_Catalog.xlsx`
 
 A catalog of **608 process descriptors** exported through the openLCA IPC server
-from the database active during the August 2026 revision workflow. The catalog
+from the database active during the August 2026 workflow. The catalog
 contains process UUIDs, process names, locations, process types, categories, and
 library fields where available.
 
@@ -18,10 +18,7 @@ This file is a process-search catalog, not a redistribution of the complete LCI
 database. It does not contain the full process exchanges, product systems, or
 impact results.
 
-The exact database release/version should be recorded in the manuscript and in
-`openlca/CATALOG_METADATA.md` before final publication. The IPC export itself
-identifies the active processes but does not reliably encode the human-readable
-database release name.
+
 
 ### `expert_reference/LLM_LCA_Expert_Reference_Set_With_ELCD.xlsx`
 
@@ -52,7 +49,7 @@ building-level validation by themselves.
 
 ## Related controlled model benchmark
 
-The executable Reviewer Comment 5 experiment is kept under
+The executable experiment is kept under
 `experiments/model_benchmark/`. It uses these 35 BOM items and this exported
 608-process catalog as fixed benchmark inputs. Model outputs should not be
 scored as accuracy results until the expert reference workbook has been fully
