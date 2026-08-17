@@ -22,7 +22,3 @@ python scripts/export_openlca_process_catalog.py --database-label "ELCD 3.2"
 Before running the script, open the intended database in openLCA and start the
 IPC server on port 8080. The script exports descriptors from whichever database
 is active in openLCA at that moment.
-
-For manuscript reproducibility, replace the placeholder above with the exact
-ELCD release/version shown in the local openLCA installation and keep that value
-consistent with the paper.
