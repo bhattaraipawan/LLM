@@ -16,7 +16,7 @@
 Use:
 
 ```bash
-python scripts/export_openlca_process_catalog.py --database-label "ELCD <exact version>"
+python scripts/export_openlca_process_catalog.py --database-label "ELCD 3.2"
 ```
 
 Before running the script, open the intended database in openLCA and start the
