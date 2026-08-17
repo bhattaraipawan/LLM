@@ -1,0 +1,36 @@
+id,case_study,original_description,quantity,unit
+S01,Stonecrete House,Ordinary Portland Cement (OPC 43-grade),5000,kg
+S02,Stonecrete House,"River Sand (clean, well-graded)",24000,kg
+S03,Stonecrete House,Natural Gravel,12,m³
+S04,Stonecrete House,Stone,12,m³
+S05,Stonecrete House,Plain Cement Concrete (PCC M10 — 1:3:6) - Binding Layer,1.6,m³
+S06,Stonecrete House,Stonecrete block,3512.34,kg
+S07,Stonecrete House,Rebar TMT Fe500,250,kg
+S08,Stonecrete House,"Binding Wire (soft annealed, 18-gauge)",5,kg
+S09,Stonecrete House,"Corrugated Galvanized Iron (CGI) Sheet, 0.45 mm BMT",190.71,kg
+S10,Stonecrete House,"Timber for purlin, rafter, and column post",2.08,m³
+S11,Stonecrete House,"Plaster 1:4 — External Walls, 15 mm thick",65,m²
+S12,Stonecrete House,"Plaster 1:6 — Internal Walls, 12 mm thick",128,m²
+B01,Bamboo House,Cement,1250,kg
+B02,Bamboo House,Sand,9600,kg
+B03,Bamboo House,Natural Gravel,6,m³
+B04,Bamboo House,Stone,9,m³
+B05,Bamboo House,Soil,12,m³
+B06,Bamboo House,Local Wood,0.21,m³
+B07,Bamboo House,19mm Plywood,4,m²
+B08,Bamboo House,Nail,2,kg
+B09,Bamboo House,10mm Rebar,116,kg
+B10,Bamboo House,7mm Rebar,51,kg
+B11,Bamboo House,Binding Wire,4,kg
+B12,Bamboo House,24 Gauge CGI Sheets,630,kg
+B13,Bamboo House,3mm Commercial Plywood,3,m²
+B14,Bamboo House,Bamboo,4.82,m³
+A01,Bamboo House with Attic,Cement,7300,kg
+A02,Bamboo House with Attic,Sand,27200,kg
+A03,Bamboo House with Attic,Natural Gravel,6,m³
+A04,Bamboo House with Attic,Soil Blocks,6042,Nos.
+A05,Bamboo House with Attic,Wood,0.264,m³
+A06,Bamboo House with Attic,Bamboo,5.915,m³
+A07,Bamboo House with Attic,Rebar,674,kg
+A08,Bamboo House with Attic,Soil,3,m³
+A09,Bamboo House with Attic,CGI Sheets,478.07,kg

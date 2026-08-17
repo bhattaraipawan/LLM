@@ -1,0 +1,9 @@
+# Controlled four-model benchmark for Reviewer Comment 5.
+# Designed for Google Colab T4 or another CUDA GPU.
+torch>=2.4
+transformers>=4.45,<5
+accelerate>=1,<2
+bitsandbytes>=0.43
+safetensors>=0.4
+huggingface_hub>=0.24
+openpyxl>=3.1,<4
