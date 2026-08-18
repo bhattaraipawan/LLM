@@ -17,7 +17,7 @@ server on port 8080.
 
 Usage
 -----
-    python scripts/export_openlca_process_catalog.py
+    LLM/scripts/export_openlca_process_catalog.py
 
 Requirements
 ------------
