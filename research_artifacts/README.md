@@ -7,7 +7,7 @@ be inspected without changing the runtime implementation.
 
 ## Contents
 
-### `openlca/ELCD_Process_Catalog.xlsx`
+### `LLM/research_artificats/ELCD_Process_Catalog.xlsx`
 
 A catalog of **608 process descriptors** exported through the openLCA IPC server
 from the database active during the August 2026 workflow. The catalog
@@ -15,12 +15,10 @@ contains process UUIDs, process names, locations, process types, categories, and
 library fields where available.
 
 This file is a process-search catalog, not a redistribution of the complete LCI
-database. It does not contain the full process exchanges, product systems, or
-impact results.
+database. 
 
 
-
-### `expert_reference/LLM_LCA_Expert_Reference_Set_With_ELCD.xlsx`
+### `LLM/research_artificats/expert_reference/LLM_LCA_Expert_Reference_Set_With_ELCD.xlsx`
 
 Workbook prepared for independent expert review of the **35 BOM entries** used
 in the three demonstration case studies.
@@ -37,8 +35,7 @@ The workbook intentionally does **not** expose LLM answers to the experts during
 initial labeling, reducing anchoring bias. It also records the exact process UUID
 for selected database processes.
 
-> Status: this workbook is an evaluation template / in-progress reference set.
-> Blank expert cells must not be interpreted as completed ground-truth labels.
+
 
 ## Why these artifacts are included
 
@@ -51,6 +48,4 @@ building-level validation by themselves.
 
 The executable experiment is kept under
 `experiments/model_benchmark/`. It uses these 35 BOM items and this exported
-608-process catalog as fixed benchmark inputs. Model outputs should not be
-scored as accuracy results until the expert reference workbook has been fully
-reconciled.
+608-process catalog as fixed benchmark inputs.
