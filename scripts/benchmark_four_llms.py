@@ -98,12 +98,12 @@ DEFAULT_MAX_NEW_TOKENS = 384
 DEFAULT_TEMPERATURE = 0.1
 
 DEFAULT_CATALOG_PATH = Path(
-    "research_artifacts/openlca/openlca_process_catalog.xlsx"
+    "ELCD_Check/ELCD_Process_Catalog.xlsx"
 )
 DEFAULT_BENCHMARK_PATH = Path(
-    "research_artifacts/model_benchmark/input/LLM_Model_Evaluation_Step1_Reference_Set.xlsx"
+    "Four_Models/Input/LLM_Model_Evaluation_Reference_Set.xlsx"
 )
-DEFAULT_OUTPUT_ROOT = Path("research_artifacts/model_benchmark/output")
+DEFAULT_OUTPUT_ROOT = Path("Four_Models/Output")
 
 MODEL_SPECS: dict[str, dict[str, str]] = {
     "llama": {
