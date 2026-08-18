@@ -1,4 +1,4 @@
-# Controlled four-model benchmark for Reviewer Comment 5.
+# Controlled four-model benchmark.
 # Designed for Google Colab T4 or another CUDA GPU.
 torch>=2.4
 transformers>=4.45,<5
