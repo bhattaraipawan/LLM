@@ -1,4 +1,4 @@
-# Research artifacts for reviewer revision
+# Research artifacts
 
 This folder contains the transparent reference-set and openLCA process-catalog
 assets used during the manuscript revision. These files are intentionally kept
