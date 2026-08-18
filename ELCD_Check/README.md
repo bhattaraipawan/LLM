@@ -1,13 +1,13 @@
-# Research artifacts
+# ELCD Check
 
 This folder contains the transparent reference-set and openLCA process-catalog
-assets used during the manuscript revision. These files are intentionally kept
+assets used during the manuscript preparation. These files are intentionally kept
 separate from the application source code so that the evaluation workflow can
 be inspected without changing the runtime implementation.
 
 ## Contents
 
-### `LLM/research_artificats/ELCD_Process_Catalog.xlsx`
+### `LLM/ELCD_Check/ELCD_Process_Catalog.xlsx`
 
 A catalog of **608 process descriptors** exported through the openLCA IPC server
 from the database active during the August 2026 workflow. The catalog
@@ -18,7 +18,7 @@ This file is a process-search catalog, not a redistribution of the complete LCI
 database. 
 
 
-### `LLM/research_artificats/expert_reference/LLM_LCA_Expert_Reference_Set_With_ELCD.xlsx`
+### `LLM/ELCD_Check/expert_reference/LLM_LCA_Expert_Reference_Set_With_ELCD.xlsx`
 
 Workbook prepared for independent expert review of the **35 BOM entries** used
 in the three demonstration case studies.
