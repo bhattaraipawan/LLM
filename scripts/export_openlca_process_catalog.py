@@ -45,8 +45,8 @@ EXPORTER_VERSION = "1.0.0"
 CATALOG_SCHEMA_VERSION = "1.0"
 DEFAULT_DATABASE_LABEL = "ELCD 3.2"
 DEFAULT_IPC_PORT = 8080
-DEFAULT_OUTPUT_DIR = "research_artifacts/openlca"
-DEFAULT_OUTPUT_FILE = "openlca_process_catalog.xlsx"
+DEFAULT_OUTPUT_DIR = "research_artifacts"
+DEFAULT_OUTPUT_FILE = "ELCD_Process_Catalog.xlsx"
 
 PROCESS_COLUMNS = [
     "process_uuid",
