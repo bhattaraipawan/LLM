@@ -1,16 +1,38 @@
-"""Freeze the reconciled expert labels into the four-model benchmark input.
+"""Validate and freeze the reconciled expert reference set for LLM benchmarking.
 
-This script intentionally refuses to create a final benchmark reference set
-until every reconciliation row is complete and internally consistent.
+The human expert workbook is the scientific ground truth. This helper does not
+invent, average, or change expert labels. It only:
 
-Workflow:
-    1. Experts complete the Expert_A and Expert_B sheets independently.
-    2. Disagreements are resolved in the Reconciliation sheet.
-    3. Run this script.
-    4. Run scripts/benchmark_four_llms.py.
+1. reads the final values from the Reconciliation sheet;
+2. enforces the study's simplified resolution rule;
+3. validates Direct/Proxy process UUIDs against the exported ELCD catalog; and
+4. writes a compact frozen workbook used by the four-model benchmark.
+
+Study rule
+----------
+Direct
+    A selected ELCD process is considered a sufficiently direct representation.
+Proxy
+    An ELCD process is available and intentionally used as a substitute.
+Review Required
+    No usable ELCD process is available. These rows intentionally have no
+    process UUID and are the rows eligible for the later LLM-fallback stage.
+
+Default input:
+    ELCD_Check/expert_reference/LLM_LCA_Expert_Reference_Set_With_ELCD.xlsx
 
 Default output:
     Four_Models/Input/LLM_Model_Evaluation_Reference_Set.xlsx
+
+Examples
+--------
+Validate only::
+
+    python scripts/prepare_benchmark_reference.py --validate-only
+
+Validate and freeze::
+
+    python scripts/prepare_benchmark_reference.py
 """
 
 from __future__ import annotations
@@ -23,6 +45,8 @@ from typing import Any
 import pandas as pd
 
 
+SCRIPT_VERSION = "2.0.0"
+EXPECTED_ROWS = 35
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXPERT_WORKBOOK = (
     REPO_ROOT
@@ -34,7 +58,18 @@ DEFAULT_CATALOG = REPO_ROOT / "ELCD_Check" / "ELCD_Process_Catalog.xlsx"
 DEFAULT_OUTPUT = (
     REPO_ROOT / "Four_Models" / "Input" / "LLM_Model_Evaluation_Reference_Set.xlsx"
 )
-EXPECTED_ROWS = 35
+
+UNAVAILABLE_LABELS = {
+    "",
+    "n/a",
+    "na",
+    "not available",
+    "not applicable",
+    "none",
+    "no match",
+    "no defensible match",
+    "no defensible elcd match",
+}
 
 
 def clean(value: Any) -> str:
@@ -44,10 +79,16 @@ def clean(value: Any) -> str:
 
 
 def key(value: Any) -> str:
-    return " ".join(clean(value).lower().replace("_", " ").replace("-", " ").split())
+    return " ".join(
+        clean(value).lower().replace("_", " ").replace("-", " ").split()
+    )
 
 
-def canonical_decision(value: Any) -> str:
+def is_unavailable(value: Any) -> bool:
+    return key(value) in UNAVAILABLE_LABELS
+
+
+def canonical_match_type(value: Any) -> str:
     text = key(value)
     if text in {"direct", "direct match", "exact", "exact match"}:
         return "Direct"
@@ -59,6 +100,8 @@ def canonical_decision(value: Any) -> str:
         "unresolved",
         "no match",
         "no defensible match",
+        "no defensible elcd match",
+        "not available",
     }:
         return "Review Required"
     return ""
@@ -66,25 +109,45 @@ def canonical_decision(value: Any) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate expert reconciliation and freeze the benchmark reference workbook."
+        description="Validate expert reconciliation and freeze the four-model benchmark input."
     )
     parser.add_argument("--expert-workbook", type=Path, default=DEFAULT_EXPERT_WORKBOOK)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate all 35 rows but do not write the frozen benchmark workbook.",
+    )
     return parser.parse_args()
 
 
+def find_header(columns: list[Any], candidates: list[str]) -> str | None:
+    normalized = {key(col): str(col) for col in columns}
+    for candidate in candidates:
+        found = normalized.get(key(candidate))
+        if found is not None:
+            return found
+    return None
+
+
 def load_base_rows(expert_path: Path) -> pd.DataFrame:
-    base = pd.read_excel(expert_path, sheet_name="Expert_A", header=6)
-    base = base.rename(
-        columns={
-            "ID": "sample_id",
-            "Case Study": "case_study",
-            "Original BOM Description": "material_description",
-            "Qty.": "quantity",
-            "Unit": "unit",
-        }
-    )
+    """Read immutable BOM descriptors from Expert_A.
+
+    Only ID/case/BOM/quantity/unit are used. Expert_A's judgment fields are not
+    used to manufacture the final labels.
+    """
+    base = pd.read_excel(expert_path, sheet_name="Expert_A", header=3)
+    rename = {
+        "ID": "sample_id",
+        "Case Study": "case_study",
+        "Original BOM Description": "material_description",
+        "Qty.": "quantity",
+        "Qty": "quantity",
+        "Quantity": "quantity",
+        "Unit": "unit",
+    }
+    base = base.rename(columns={c: rename[c] for c in base.columns if c in rename})
     required = ["sample_id", "case_study", "material_description", "quantity", "unit"]
     missing = [c for c in required if c not in base.columns]
     if missing:
@@ -97,33 +160,39 @@ def load_base_rows(expert_path: Path) -> pd.DataFrame:
 
 def load_reconciliation(expert_path: Path) -> pd.DataFrame:
     rec = pd.read_excel(expert_path, sheet_name="Reconciliation", header=5)
-    rec = rec.rename(
-        columns={
-            "ID": "sample_id",
-            "Original BOM Description": "reconciliation_description",
-            "Final Normalized Material": "ground_truth_normalized_material",
-            "Final Reference Process": "ground_truth_process_name",
-            "Final Process UUID (auto)": "ground_truth_process_uuid",
-            "Final Decision": "ground_truth_match_type",
-            "Notes": "reviewer_notes",
-        }
-    )
-    required = [
-        "sample_id",
-        "reconciliation_description",
-        "ground_truth_normalized_material",
-        "ground_truth_process_name",
-        "ground_truth_process_uuid",
-        "ground_truth_match_type",
-        "reviewer_notes",
-    ]
-    missing = [c for c in required if c not in rec.columns]
+
+    # Header aliases support both the older and the cleaned workbook versions.
+    column_map = {
+        "sample_id": find_header(list(rec.columns), ["ID"]),
+        "reconciliation_description": find_header(
+            list(rec.columns), ["Original BOM Description"]
+        ),
+        "ground_truth_normalized_material": find_header(
+            list(rec.columns), ["Final Normalized Material"]
+        ),
+        "ground_truth_process_name": find_header(
+            list(rec.columns), ["Final Reference Process"]
+        ),
+        "ground_truth_process_uuid": find_header(
+            list(rec.columns), ["Final Process UUID", "Final Process UUID (auto)"]
+        ),
+        "ground_truth_match_type": find_header(
+            list(rec.columns), ["Final Decision", "Final Match Type"]
+        ),
+        "reviewer_notes": find_header(list(rec.columns), ["Notes"]),
+    }
+
+    missing = [name for name, source in column_map.items() if source is None and name != "reviewer_notes"]
     if missing:
-        raise ValueError(f"Reconciliation sheet is missing columns: {missing}")
-    rec = rec[required].copy()
-    rec = rec[rec["sample_id"].notna()].copy()
-    rec["sample_id"] = rec["sample_id"].map(clean)
-    return rec.reset_index(drop=True)
+        raise ValueError(f"Reconciliation sheet is missing required fields: {missing}")
+
+    data: dict[str, Any] = {}
+    for target, source in column_map.items():
+        data[target] = rec[source] if source is not None else ""
+    out = pd.DataFrame(data)
+    out = out[out["sample_id"].notna()].copy()
+    out["sample_id"] = out["sample_id"].map(clean)
+    return out.reset_index(drop=True)
 
 
 def load_catalog(catalog_path: Path) -> pd.DataFrame:
@@ -132,12 +201,21 @@ def load_catalog(catalog_path: Path) -> pd.DataFrame:
     missing = [c for c in required if c not in catalog.columns]
     if missing:
         raise ValueError(f"Catalog is missing columns: {missing}")
-    catalog = catalog[required].copy()
-    catalog["process_uuid"] = catalog["process_uuid"].map(clean)
-    catalog["process_name"] = catalog["process_name"].map(clean)
+
+    for optional in ["category", "location", "library", "process_type"]:
+        if optional not in catalog.columns:
+            catalog[optional] = ""
+
+    cols = required + ["category", "location", "library", "process_type"]
+    catalog = catalog[cols].copy()
+    for col in cols:
+        catalog[col] = catalog[col].map(clean)
+
     catalog = catalog[
         catalog["process_uuid"].ne("") & catalog["process_name"].ne("")
     ].copy()
+    if catalog["process_uuid"].str.lower().duplicated().any():
+        raise ValueError("Catalog contains duplicate process UUIDs.")
     return catalog.reset_index(drop=True)
 
 
@@ -148,9 +226,13 @@ def validate_and_build(
     source_path: Path,
 ) -> pd.DataFrame:
     if len(base) != EXPECTED_ROWS:
-        raise ValueError(f"Expected {EXPECTED_ROWS} BOM rows in Expert_A; found {len(base)}")
+        raise ValueError(
+            f"Expected {EXPECTED_ROWS} BOM rows in Expert_A; found {len(base)}."
+        )
     if len(rec) != EXPECTED_ROWS:
-        raise ValueError(f"Expected {EXPECTED_ROWS} reconciliation rows; found {len(rec)}")
+        raise ValueError(
+            f"Expected {EXPECTED_ROWS} reconciliation rows; found {len(rec)}."
+        )
     if base["sample_id"].duplicated().any() or rec["sample_id"].duplicated().any():
         raise ValueError("Duplicate sample IDs found in the expert workbook.")
 
@@ -161,11 +243,9 @@ def validate_and_build(
         ].tolist()
         raise ValueError(f"Reconciliation is missing sample IDs: {missing_ids}")
 
-    name_to_uuid = {
-        key(name): uuid for name, uuid in zip(catalog["process_name"], catalog["process_uuid"])
-    }
-    uuid_to_name = {
-        clean(uuid).lower(): name for uuid, name in zip(catalog["process_uuid"], catalog["process_name"])
+    uuid_to_row = {
+        clean(row.process_uuid).lower(): row
+        for row in catalog.itertuples(index=False)
     }
 
     errors: list[str] = []
@@ -178,48 +258,67 @@ def validate_and_build(
         normalized = clean(row["ground_truth_normalized_material"])
         process_name = clean(row["ground_truth_process_name"])
         process_uuid = clean(row["ground_truth_process_uuid"]).lower()
-        decision = canonical_decision(row["ground_truth_match_type"])
+        match_type = canonical_match_type(row["ground_truth_match_type"])
         notes = clean(row["reviewer_notes"])
 
         if key(base_description) != key(rec_description):
-            errors.append(f"{sid}: BOM description differs between Expert_A and Reconciliation")
-        if not normalized:
-            errors.append(f"{sid}: Final Normalized Material is blank")
-        if not decision:
             errors.append(
-                f"{sid}: Final Decision must be Direct, Proxy, or Review Required"
+                f"{sid}: BOM description differs between Expert_A and Reconciliation."
+            )
+        if not normalized:
+            errors.append(f"{sid}: Final Normalized Material is blank.")
+        if not match_type:
+            errors.append(
+                f"{sid}: Final Decision must be Direct, Proxy, or Review Required."
             )
 
-        unresolved = decision == "Review Required"
-        if decision == "":
-            # Missing decision is already reported above; avoid cascading process
-            # errors for an item that has not yet been reconciled.
-            pass
-        elif unresolved:
-            if process_name or process_uuid:
+        unresolved = match_type == "Review Required"
+
+        if unresolved:
+            # The expert workbook may display "Not available" for readability.
+            # The frozen benchmark stores unresolved process fields as blank.
+            if process_uuid:
                 errors.append(
-                    f"{sid}: Review Required row must have blank final process name/UUID"
+                    f"{sid}: Review Required row must not contain a process UUID."
                 )
-            process_name = ""
-            process_uuid = ""
+            if process_name and not is_unavailable(process_name):
+                errors.append(
+                    f"{sid}: Review Required is allowed only when the final process is unavailable; "
+                    f"found {process_name!r}."
+                )
+            canonical_name = ""
+            canonical_uuid = ""
+            category = ""
+            location = ""
+            library = ""
+            process_type = ""
         else:
-            if not process_name:
-                errors.append(f"{sid}: {decision} row is missing Final Reference Process")
-            if process_name and not process_uuid:
-                process_uuid = name_to_uuid.get(key(process_name), "").lower()
+            if is_unavailable(process_name):
+                errors.append(
+                    f"{sid}: {match_type} requires a selected ELCD process, not 'Not available'."
+                )
             if not process_uuid:
                 errors.append(
-                    f"{sid}: Final Reference Process does not resolve to an exact catalog UUID"
+                    f"{sid}: {match_type} row is missing Final Process UUID."
                 )
-            elif process_uuid not in uuid_to_name:
-                errors.append(f"{sid}: Final Process UUID is not present in the catalog")
+                canonical_name = ""
+                canonical_uuid = ""
+                category = location = library = process_type = ""
+            elif process_uuid not in uuid_to_row:
+                errors.append(
+                    f"{sid}: Final Process UUID {process_uuid!r} is not present in the exported catalog."
+                )
+                canonical_name = ""
+                canonical_uuid = process_uuid
+                category = location = library = process_type = ""
             else:
-                catalog_name = uuid_to_name[process_uuid]
-                if process_name and key(catalog_name) != key(process_name):
-                    errors.append(
-                        f"{sid}: Final process name does not match the catalog process for its UUID"
-                    )
-                process_name = catalog_name
+                catalog_row = uuid_to_row[process_uuid]
+                canonical_uuid = clean(catalog_row.process_uuid).lower()
+                canonical_name = clean(catalog_row.process_name)
+                category = clean(catalog_row.category)
+                location = clean(catalog_row.location)
+                library = clean(catalog_row.library)
+                process_type = clean(catalog_row.process_type)
 
         output_rows.append(
             {
@@ -229,67 +328,119 @@ def validate_and_build(
                 "quantity": row["quantity"],
                 "unit": clean(row["unit"]),
                 "ground_truth_normalized_material": normalized,
-                "ground_truth_process_name": process_name,
-                "ground_truth_process_uuid": process_uuid,
-                "ground_truth_match_type": decision,
+                "ground_truth_process_name": canonical_name,
+                "ground_truth_process_uuid": canonical_uuid,
+                "ground_truth_match_type": match_type,
                 "ground_truth_unresolved": unresolved,
+                "ground_truth_process_category": category,
+                "ground_truth_process_location": location,
+                "ground_truth_process_library": library,
+                "ground_truth_process_type": process_type,
                 "reference_status": "FINAL",
                 "reviewer_notes": notes,
-                "source_location": str(source_path.relative_to(REPO_ROOT))
-                if source_path.is_relative_to(REPO_ROOT)
-                else str(source_path),
+                "source_location": (
+                    str(source_path.relative_to(REPO_ROOT))
+                    if source_path.is_relative_to(REPO_ROOT)
+                    else str(source_path)
+                ),
             }
         )
 
     if errors:
-        shown = "\n  - ".join(errors[:30])
-        extra = f"\n  ... plus {len(errors) - 30} more" if len(errors) > 30 else ""
+        shown = "\n  - ".join(errors[:40])
+        extra = f"\n  ... plus {len(errors) - 40} more" if len(errors) > 40 else ""
         raise ValueError(
-            "Expert reconciliation is not ready to freeze. Fix these items first:\n  - "
-            + shown
-            + extra
+            "Expert reconciliation is not ready to freeze:\n  - " + shown + extra
         )
 
-    return pd.DataFrame(output_rows)
+    result = pd.DataFrame(output_rows)
+
+    # Final semantic guardrails implementing the user's intended hierarchy.
+    bad_review = result[
+        (result["ground_truth_match_type"] == "Review Required")
+        & result["ground_truth_process_uuid"].ne("")
+    ]
+    bad_matched = result[
+        result["ground_truth_match_type"].isin(["Direct", "Proxy"])
+        & result["ground_truth_process_uuid"].eq("")
+    ]
+    if not bad_review.empty or not bad_matched.empty:
+        raise AssertionError("Internal classification validation failed.")
+
+    return result
 
 
-def write_output(df: pd.DataFrame, output_path: Path, expert_path: Path, catalog_path: Path) -> None:
+def write_output(
+    df: pd.DataFrame,
+    output_path: Path,
+    expert_path: Path,
+    catalog_path: Path,
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def repo_display(path: Path) -> str:
+        try:
+            return str(path.relative_to(REPO_ROOT))
+        except ValueError:
+            return str(path)
+
+    counts = df["ground_truth_match_type"].value_counts().to_dict()
     metadata = pd.DataFrame(
         [
+            {"field": "script_version", "value": SCRIPT_VERSION},
             {"field": "reference_set_rows", "value": len(df)},
             {"field": "reference_status", "value": "FINAL"},
-            {"field": "frozen_at_utc", "value": datetime.now(timezone.utc).replace(microsecond=0).isoformat()},
-            {"field": "source_expert_workbook", "value": str(expert_path)},
-            {"field": "catalog_path", "value": str(catalog_path)},
-            {"field": "prepared_by", "value": "scripts/prepare_benchmark_reference.py"},
+            {
+                "field": "frozen_at_utc",
+                "value": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            },
+            {"field": "direct_rows", "value": counts.get("Direct", 0)},
+            {"field": "proxy_rows", "value": counts.get("Proxy", 0)},
+            {
+                "field": "review_required_rows",
+                "value": counts.get("Review Required", 0),
+            },
+            {"field": "source_expert_workbook", "value": repo_display(expert_path)},
+            {"field": "catalog_path", "value": repo_display(catalog_path)},
+            {
+                "field": "prepared_by",
+                "value": "scripts/prepare_benchmark_reference.py",
+            },
         ]
     )
+
     instructions = pd.DataFrame(
         [
             {
                 "item": "Status",
-                "details": "FINAL frozen expert reference set. Do not edit after model scoring begins.",
+                "details": "FINAL frozen human reference set. Do not edit after model scoring begins.",
             },
             {
-                "item": "Matched rows",
-                "details": "Direct/Proxy rows use an exact process UUID from the exported catalog.",
+                "item": "Direct",
+                "details": "A selected ELCD process is considered a sufficiently direct representation.",
             },
             {
-                "item": "Unresolved rows",
-                "details": "Review Required rows intentionally have blank process name/UUID.",
+                "item": "Proxy",
+                "details": "A selected ELCD process is intentionally used as a defensible substitute.",
             },
             {
-                "item": "Benchmark",
-                "details": "Run scripts/benchmark_four_llms.py only after this file has been frozen.",
+                "item": "Review Required",
+                "details": "No usable ELCD process is available; process name/UUID are intentionally blank in this frozen file.",
+            },
+            {
+                "item": "No leakage",
+                "details": "The benchmark retrieves candidates from the original BOM description only; human normalized labels are used only for scoring.",
             },
         ]
     )
 
+    # openpyxl is used here because this is a repository script intended to be
+    # executed by the researcher, not model-generated scientific content.
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         instructions.to_excel(writer, sheet_name="Instructions", index=False)
         df.to_excel(writer, sheet_name="Reference_Set", index=False)
         metadata.to_excel(writer, sheet_name="Metadata", index=False)
+
         for ws in writer.book.worksheets:
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
@@ -314,9 +465,23 @@ def main() -> None:
     rec = load_reconciliation(expert_path)
     catalog = load_catalog(catalog_path)
     frozen = validate_and_build(base, rec, catalog, expert_path)
+
+    counts = frozen["ground_truth_match_type"].value_counts().to_dict()
+    print("Expert reference validation passed.")
+    print(f"Rows: {len(frozen)}")
+    print(
+        "Final labels: "
+        f"Direct={counts.get('Direct', 0)}, "
+        f"Proxy={counts.get('Proxy', 0)}, "
+        f"Review Required={counts.get('Review Required', 0)}"
+    )
+
+    if args.validate_only:
+        print("Validation only: no frozen workbook written.")
+        return
+
     write_output(frozen, output_path, expert_path, catalog_path)
     print(f"Frozen benchmark reference set saved: {output_path}")
-    print(f"Rows: {len(frozen)} | status: FINAL")
 
 
 if __name__ == "__main__":
