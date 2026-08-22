@@ -4,7 +4,7 @@ This experiment is intentionally aligned with the language-model role in the
 paper. It evaluates:
 
 1. material normalization;
-2. deterministic ELCD/openLCA candidate-pool retrieval;
+2. deterministic character n-gram TF-IDF ELCD/openLCA candidate retrieval;
 3. LLM ranking of supplied candidate processes;
 4. final process selection or Review Required routing;
 5. Direct / Proxy / Review Required classification; and
@@ -27,24 +27,23 @@ For a quick smoke test:
 
 Important
 ---------
-The benchmark input must be a *frozen expert reference set*. The repository
-includes a structurally complete workbook at:
-
-    Four_Models/Input/LLM_Model_Evaluation_Reference_Set.xlsx
-
-but it remains PENDING_RECONCILIATION until the expert-review workbook is
-completed. The benchmark refuses to score pending rows. After expert
-reconciliation is complete, run:
+The benchmark input must be a *frozen expert reference set*. Create it from the
+reconciled human workbook before model scoring:
 
     python scripts/prepare_benchmark_reference.py
 
-That helper validates and freezes the expert labels into the benchmark input.
+Then validate the complete benchmark inputs without loading a model:
+
+    python scripts/benchmark_four_llms.py --check-inputs
+
+The benchmark refuses to score unfinished or internally inconsistent labels.
 """
 
 from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import math
 import os
@@ -62,11 +61,12 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 import torch
-from rapidfuzz import fuzz, process as rf_process
+from rapidfuzz import fuzz
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import f1_score
 
 
-SCRIPT_VERSION = "1.2.0"
+SCRIPT_VERSION = "2.0.0"
 DATABASE_LABEL = "ELCD 3.2"
 SEED = 42
 DEFAULT_RUNS = 5
@@ -101,25 +101,35 @@ MODEL_SPECS: dict[str, dict[str, str]] = {
     },
 }
 
-SYSTEM_PROMPT = """You are an LCA material-matching evaluator for A1-A3 screening.
-Your role is limited to material interpretation and process matching against the
-supplied openLCA/ELCD candidate processes.
+SYSTEM_PROMPT = """You are an LCA material-normalization and ELCD process-matching evaluator for A1-A3 screening.
+
+Your task is deliberately limited to language interpretation and process matching.
+You are NOT calculating embodied carbon and you are NOT generating environmental
+factors. Use only the candidate processes supplied in the prompt.
+
+Study definitions:
+- direct: a selected ELCD process sufficiently represents the BOM material/product.
+- proxy: an ELCD process is selected as a technically defensible substitute because
+  an exact/direct representation is not available.
+- review_required: no supplied ELCD candidate is usable enough to select. This is
+  reserved for an unmatched material. Do NOT use review_required merely because a
+  selected process is imperfect, geographically different, or requires judgment;
+  if you select an ELCD substitute, classify it as proxy.
 
 Rules:
 1. Use ONLY process UUIDs that appear in the supplied candidate list.
 2. Do NOT invent process UUIDs, emission factors, GWP values, EPDs, citations,
-   or environmental data.
-3. Normalize the BOM description into a concise engineering material name.
+   or any environmental data.
+3. Normalize the original BOM description into a concise engineering material name.
 4. Rank the most defensible supplied candidates from best to worst, up to the
    requested top-k.
-5. Select exactly one process when a supplied candidate is defensible.
-6. Classify the final outcome as:
-   - direct: the selected process is a sufficiently direct representation;
-   - proxy: the selected process is a defensible related substitute; or
-   - review_required: no supplied candidate is defensible enough to select.
-7. For review_required, selected_process_uuid and selected_process_name MUST be
+5. If at least one candidate is defensible, select exactly one supplied process and
+   classify it as direct or proxy.
+6. Use review_required only when no supplied candidate is defensible.
+7. For review_required, selected_process_uuid and selected_process_name MUST both be
    empty strings.
-8. Return JSON only, with no Markdown and no text outside the JSON object.
+8. The selected process must also appear in ranked_candidates.
+9. Return JSON only, with no Markdown and no text outside the JSON object.
 
 Required JSON schema:
 {
@@ -216,6 +226,19 @@ class LoadedModel:
     tokenizer_revision: str
 
 
+@dataclass
+class CatalogRetriever:
+    """Deterministic model-independent candidate retriever.
+
+    Character n-gram TF-IDF is used because BOM descriptions and process names
+    often differ in word form, abbreviations, or descriptive suffixes. The
+    retriever is fit only on the exported catalog text and never on expert labels.
+    """
+
+    vectorizer: Any
+    matrix: Any
+
+
 def package_version(name: str) -> str:
     try:
         return importlib_metadata.version(name)
@@ -225,6 +248,14 @@ def package_version(name: str) -> str:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def normalize_text(value: Any) -> str:
@@ -315,6 +346,11 @@ def parse_args() -> argparse.Namespace:
         "--combine-results",
         action="store_true",
         help="Combine existing per-model benchmark_results.xlsx files without loading an LLM.",
+    )
+    parser.add_argument(
+        "--check-inputs",
+        action="store_true",
+        help="Validate the ELCD catalog and frozen reference set, print diagnostics, and exit without loading an LLM.",
     )
     parser.add_argument(
         "--no-4bit",
@@ -538,24 +574,45 @@ def load_benchmark(path: Path, catalog: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def build_catalog_retriever(catalog: pd.DataFrame) -> CatalogRetriever:
+    vectorizer = TfidfVectorizer(
+        analyzer="char_wb",
+        ngram_range=(3, 5),
+        lowercase=False,
+        sublinear_tf=True,
+        norm="l2",
+    )
+    matrix = vectorizer.fit_transform(catalog["_search_text"].tolist())
+    return CatalogRetriever(vectorizer=vectorizer, matrix=matrix)
+
+
 def retrieve_candidate_pool(
     row: pd.Series,
     catalog: pd.DataFrame,
+    retriever: CatalogRetriever,
     pool_size: int,
 ) -> list[dict[str, Any]]:
-    """Deterministic lexical retrieval used identically for every model."""
+    """Deterministic candidate retrieval identical for all four models.
+
+    The query uses only the original BOM description. Human normalized material
+    and reference process labels are never used for retrieval.
+    """
     description = str(row.get("material_description", "")).strip()
     query = normalize_text(description)
-    choices = catalog["_search_text"].tolist()
-    matches = rf_process.extract(
-        query,
-        choices,
-        scorer=fuzz.WRatio,
-        limit=min(pool_size, len(catalog)),
-    )
+    query_vector = retriever.vectorizer.transform([query])
+    scores = (retriever.matrix @ query_vector.T).toarray().ravel()
+
+    ranked_indices = sorted(
+        range(len(catalog)),
+        key=lambda i: (
+            -float(scores[i]),
+            str(catalog.iloc[i]["process_name"]).lower(),
+            canonical_uuid(catalog.iloc[i]["process_uuid"]),
+        ),
+    )[: min(pool_size, len(catalog))]
 
     candidates: list[dict[str, Any]] = []
-    for _, score, index in matches:
+    for index in ranked_indices:
         process_row = catalog.iloc[index]
         candidates.append(
             {
@@ -564,7 +621,7 @@ def retrieve_candidate_pool(
                 "category": process_row.get("category", ""),
                 "location": process_row.get("location", ""),
                 "process_type": process_row.get("process_type", ""),
-                "lexical_score": round(float(score), 2),
+                "retrieval_score": round(float(scores[index]), 6),
             }
         )
     return candidates
@@ -953,10 +1010,14 @@ def numeric_mean(series: pd.Series) -> float | None:
 
 
 def compute_metrics(predictions: pd.DataFrame, runs: int) -> dict[str, Any]:
+    unique_reference = predictions.drop_duplicates("sample_id")
     metrics: dict[str, Any] = {
         "n_samples": int(predictions["sample_id"].nunique()),
         "n_runs_per_sample": runs,
         "n_prediction_rows": int(len(predictions)),
+        "n_direct_reference_samples": int((unique_reference["ground_truth_match_type"] == "direct").sum()),
+        "n_proxy_reference_samples": int((unique_reference["ground_truth_match_type"] == "proxy").sum()),
+        "n_review_required_reference_samples": int((unique_reference["ground_truth_match_type"] == "review_required").sum()),
     }
 
     metrics["valid_response_rate"] = bool_mean(predictions["valid_response"])
@@ -984,6 +1045,29 @@ def compute_metrics(predictions: pd.DataFrame, runs: int) -> dict[str, Any]:
     metrics["match_type_accuracy"] = bool_mean(predictions["match_type_correct"])
     metrics["review_required_binary_accuracy"] = bool_mean(
         predictions["review_required_binary_correct"]
+    )
+
+    valid_rows = predictions[predictions["valid_response"].astype(bool)].copy()
+    if len(valid_rows):
+        y_true_review = valid_rows["ground_truth_unresolved"].astype(bool).to_numpy()
+        y_pred_review = (valid_rows["match_type"].astype(str) == "review_required").to_numpy()
+        tp = int(((y_true_review == True) & (y_pred_review == True)).sum())
+        fp = int(((y_true_review == False) & (y_pred_review == True)).sum())
+        fn = int(((y_true_review == True) & (y_pred_review == False)).sum())
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+        metrics["review_required_precision"] = float(precision)
+        metrics["review_required_recall"] = float(recall)
+        metrics["review_required_f1"] = float(f1)
+    else:
+        metrics["review_required_precision"] = None
+        metrics["review_required_recall"] = None
+        metrics["review_required_f1"] = None
+
+    matched_mask = ~predictions["ground_truth_unresolved"].astype(bool)
+    metrics["direct_proxy_match_type_accuracy_matched_rows"] = bool_mean(
+        predictions.loc[matched_mask, "match_type_correct"]
     )
     metrics["unresolved_routing_accuracy"] = bool_mean(
         predictions["unresolved_routing_correct"]
@@ -1080,6 +1164,10 @@ def metadata_rows(
         ("repeat_seeds", f"{SEED}..{SEED + args.runs - 1}"),
         ("runs_per_sample", args.runs),
         ("candidate_pool_size", args.candidate_pool_size),
+        ("retrieval_method", "character n-gram TF-IDF"),
+        ("retrieval_analyzer", "char_wb"),
+        ("retrieval_ngram_range", "3-5"),
+        ("retrieval_query_source", "original BOM description only"),
         ("reported_top_k", args.top_k),
         ("max_new_tokens", args.max_new_tokens),
         ("temperature", args.temperature),
@@ -1099,7 +1187,10 @@ def metadata_rows(
         ("scikit_learn_version", package_version("scikit-learn")),
         ("openpyxl_version", package_version("openpyxl")),
         ("catalog_path", str(Path(args.catalog).expanduser().resolve())),
+        ("catalog_sha256", sha256_file(Path(args.catalog).expanduser().resolve())),
         ("benchmark_path", str(Path(args.benchmark).expanduser().resolve())),
+        ("benchmark_sha256", sha256_file(Path(args.benchmark).expanduser().resolve())),
+        ("system_prompt_sha256", hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()),
     ]
     return [{"field": field, "value": value} for field, value in values]
 
@@ -1188,6 +1279,7 @@ def benchmark_model(
     loaded: LoadedModel,
     benchmark_df: pd.DataFrame,
     catalog: pd.DataFrame,
+    retriever: CatalogRetriever,
     args: argparse.Namespace,
 ) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
@@ -1195,7 +1287,9 @@ def benchmark_model(
     counter = 0
 
     for _, row in benchmark_df.iterrows():
-        candidates = retrieve_candidate_pool(row, catalog, args.candidate_pool_size)
+        candidates = retrieve_candidate_pool(
+            row, catalog, retriever, args.candidate_pool_size
+        )
         candidate_ids = [canonical_uuid(c["process_uuid"]) for c in candidates]
         user_prompt = build_user_prompt(row, candidates, args.top_k)
 
@@ -1341,10 +1435,35 @@ def main() -> None:
 
     print("Loading ELCD process catalog...")
     catalog = load_catalog(args.catalog)
+    retriever = build_catalog_retriever(catalog)
     print(f"Catalog processes: {len(catalog):,}")
+    print("Candidate retrieval: character n-gram TF-IDF (3-5), original BOM text only")
 
     print("Loading frozen benchmark reference set...")
     benchmark_df = load_benchmark(args.benchmark, catalog)
+
+    if args.check_inputs:
+        matched = benchmark_df[~benchmark_df["ground_truth_unresolved"].astype(bool)].copy()
+        unresolved = benchmark_df[benchmark_df["ground_truth_unresolved"].astype(bool)].copy()
+        retrieval_hits = 0
+        for _, row in matched.iterrows():
+            pool = retrieve_candidate_pool(
+                row, catalog, retriever, args.candidate_pool_size
+            )
+            pool_ids = {canonical_uuid(c["process_uuid"]) for c in pool}
+            if canonical_uuid(row["ground_truth_process_uuid"]) in pool_ids:
+                retrieval_hits += 1
+        print("Input validation passed.")
+        print(f"Reference rows: {len(benchmark_df)}")
+        print(f"Matched Direct/Proxy rows: {len(matched)}")
+        print(f"Review Required rows: {len(unresolved)}")
+        print(
+            f"Deterministic candidate-pool recall at pool_size={args.candidate_pool_size}: "
+            f"{retrieval_hits}/{len(matched)} "
+            f"({(retrieval_hits / len(matched)) if len(matched) else 0:.1%})"
+        )
+        return
+
     if args.limit is not None:
         if args.limit < 1:
             raise ValueError("--limit must be at least 1")
@@ -1370,7 +1489,9 @@ def main() -> None:
             print("=" * 80)
 
             loaded = load_model(model_key, use_4bit=not args.no_4bit)
-            predictions = benchmark_model(loaded, benchmark_df, catalog, args)
+            predictions = benchmark_model(
+                loaded, benchmark_df, catalog, retriever, args
+            )
             metrics = compute_metrics(predictions, args.runs)
             metadata = metadata_rows(loaded, args, status="completed")
             write_model_workbook(model_output_path, predictions, metrics, metadata)
